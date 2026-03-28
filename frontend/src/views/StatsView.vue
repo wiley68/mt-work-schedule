@@ -27,6 +27,32 @@ const busy = ref(false)
 
 const totalSeconds = computed(() => sessions.value.reduce((a, s) => a + s.duration_seconds, 0))
 
+type SessionGroup = {
+  operation_name: string
+  total_seconds: number
+  sessions: Session[]
+}
+
+const groupedSessions = computed((): SessionGroup[] => {
+  const map = new Map<string, Session[]>()
+  for (const s of sessions.value) {
+    const key = s.operation_name
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(s)
+  }
+  const groups: SessionGroup[] = []
+  for (const [operation_name, sess] of map) {
+    sess.sort((a, b) => a.started_at.localeCompare(b.started_at))
+    groups.push({
+      operation_name,
+      total_seconds: sess.reduce((a, x) => a + x.duration_seconds, 0),
+      sessions: sess,
+    })
+  }
+  groups.sort((a, b) => a.operation_name.localeCompare(b.operation_name, 'bg'))
+  return groups
+})
+
 function formatHms(total: number): string {
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
@@ -52,14 +78,20 @@ onMounted(load)
 watch(date, load)
 
 function exportText(): void {
+  const blocks: string[] = []
+  for (const g of groupedSessions.value) {
+    blocks.push(`${g.operation_name}\t(общо)\t\t${formatHms(g.total_seconds)}`)
+    for (const s of g.sessions) {
+      blocks.push(`\t${s.started_at}\t${s.stopped_at}\t${formatHms(s.duration_seconds)}`)
+    }
+    blocks.push('')
+  }
+  if (blocks.length && blocks[blocks.length - 1] === '') blocks.pop()
   const lines = [
     `Работен график — ${date.value}`,
     `Общо време: ${formatHms(totalSeconds.value)}`,
     '',
-    ...sessions.value.map(
-      (s) =>
-        `${s.operation_name}\t${s.started_at}\t${s.stopped_at}\t${formatHms(s.duration_seconds)}`
-    ),
+    ...blocks,
   ]
   const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
   const a = document.createElement('a')
@@ -70,12 +102,22 @@ function exportText(): void {
 }
 
 async function copyText(): Promise<void> {
+  const blocks: string[] = []
+  for (const g of groupedSessions.value) {
+    blocks.push(`${g.operation_name} | Общо: ${formatHms(g.total_seconds)}`)
+    for (const s of g.sessions) {
+      blocks.push(
+        `  ${s.started_at} – ${s.stopped_at} | ${formatHms(s.duration_seconds)}`
+      )
+    }
+    blocks.push('')
+  }
+  if (blocks.length && blocks[blocks.length - 1] === '') blocks.pop()
   const body = [
     `Работен график — ${date.value}`,
     `Общо: ${formatHms(totalSeconds.value)}`,
-    ...sessions.value.map(
-      (s) => `${s.operation_name} | ${s.started_at} – ${s.stopped_at} | ${formatHms(s.duration_seconds)}`
-    ),
+    '',
+    ...blocks,
   ].join('\n')
   try {
     await navigator.clipboard.writeText(body)
@@ -92,11 +134,23 @@ async function copyText(): Promise<void> {
 
     <p class="muted" style="margin: 0 0 0.5rem">Общо за деня: <strong>{{ formatHms(totalSeconds) }}</strong></p>
 
-    <div v-for="s in sessions" :key="s.id" class="list-row" style="flex-direction: column; align-items: stretch">
-      <div style="font-weight: 600">{{ s.operation_name }}</div>
-      <div class="muted" style="font-size: 0.85rem">
-        {{ s.started_at?.slice(11, 19) }} – {{ s.stopped_at?.slice(11, 19) }} · {{ formatHms(s.duration_seconds) }}
+    <div
+      v-for="g in groupedSessions"
+      :key="g.operation_name"
+      class="list-row"
+      style="flex-direction: column; align-items: stretch"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; flex-wrap: wrap"
+      >
+        <span style="font-weight: 600">{{ g.operation_name }}</span>
+        <span class="muted" style="font-size: 0.9rem">Общо: {{ formatHms(g.total_seconds) }}</span>
       </div>
+      <ul class="muted" style="font-size: 0.85rem; margin: 0.4rem 0 0; padding-left: 1.1rem; list-style: disc">
+        <li v-for="s in g.sessions" :key="s.id">
+          {{ s.started_at?.slice(11, 19) }} – {{ s.stopped_at?.slice(11, 19) }} · {{ formatHms(s.duration_seconds) }}
+        </li>
+      </ul>
     </div>
     <p v-if="!busy && sessions.length === 0" class="muted">Няма записи за тази дата.</p>
     <p v-if="err" class="err">{{ err }}</p>
